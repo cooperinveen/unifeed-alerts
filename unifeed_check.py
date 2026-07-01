@@ -127,6 +127,30 @@ def _field(block, name):
     return _strip_tags(m.group(1)) if m else ""
 
 
+def fetch_og_image(asset_url):
+    """Fetch an asset page and return its og:image (the canonical still), or ''.
+
+    The homepage's NEWEST item is rendered in a 'hero' block
+    (media-asset--top-video-unplayable) that omits the thumbnail — and that's
+    exactly the item we post. The list items below it carry a thumb inline, but
+    the featured one doesn't, so we pull og:image from the asset page instead.
+    Only called for items actually being posted (≈never on an empty check), so
+    the extra request is cheap. Best-effort: any failure just yields no image."""
+    url = safe_https(asset_url)
+    if not url:
+        return ""
+    try:
+        req = urllib.request.Request(
+            url, headers={"Accept": "text/html", "User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            page = resp.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        log(f"  (og:image fetch failed for {url}: {e})")
+        return ""
+    m = re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', page)
+    return m.group(1) if m else ""
+
+
 def fetch_items():
     """Fetch and parse the homepage into a list of dicts (page order: newest
     first). Each <article> block is one asset card."""
@@ -274,6 +298,10 @@ def main():
     posted = 0
     for item in new_items:
         if posting:
+            # The featured (newest) item's homepage block omits the thumbnail;
+            # backfill from the asset page's og:image. Only for items we post.
+            if not item.get("thumb"):
+                item["thumb"] = fetch_og_image(item.get("link"))
             try:
                 status = post_to_teams(webhook_url, build_card(item))
                 log(f"Posted: {item.get('id')} @ {item.get('pubDate')} (HTTP {status})")
