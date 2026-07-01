@@ -1,0 +1,54 @@
+name: UN Unifeed check
+
+on:
+  # Triggered externally by cron-job.org every ~5 min via the workflow_dispatch
+  # API — GitHub's own `schedule:` cron is best-effort and only fires every
+  # 60–90 min, too slow. To add a built-in backup, uncomment:
+  #   schedule:
+  #     - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      seed_and_post:
+        description: "Post existing results on this run (1 = yes). Normally leave blank."
+        required: false
+        default: ""
+
+# Allow the job to commit the updated state.json back to the repo.
+permissions:
+  contents: write
+
+# Never run two checks at once (would race on state.json).
+concurrency:
+  group: unifeed-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to commit SHAs (not mutable tags) for supply-chain safety.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: true
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Run checker
+        env:
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          SEED_AND_POST: ${{ github.event.inputs.seed_and_post }}
+        run: python unifeed_check.py
+
+      - name: Persist state
+        run: |
+          if [[ -n "$(git status --porcelain state.json)" ]]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add state.json
+            git commit -m "Update Unifeed watcher state [skip ci]"
+            git push
+          else
+            echo "No state change to commit."
+          fi
